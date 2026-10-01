@@ -117,19 +117,23 @@ def main():
     busy = [evaluate(metrics.METRICS["core_u"], c, ctx) for c in samples] \
         if "core_u" in metrics.METRICS else [1.0] * len(t)
     active = [i for i, u in enumerate(busy) if not math.isnan(u) and u > a.active]
-    ref = [s[a.ref][i] for i in active] if a.ref in s else []
+    # Correlate every metric with --ref and with each figure's reference.
+    refs = list(dict.fromkeys([a.ref] + [f.ref for f in metrics.FIGURES.values() if f.ref]))
+    refs = [r for r in refs if r in s and finite([s[r][i] for i in active])]
+    ref_vals = {r: [s[r][i] for i in active] for r in refs}
     print(f"{a.run.name} ({ctx['mem']}): {len(t)} intervals, {len(active)} active "
-          f"(core busy > {a.active:.0%}); r = Pearson vs {a.ref}")
-    print(f"  {'metric':16s} {'axis':6s} {'mean':>10s} {'median':>10s} {'r':>7s}  label")
+          f"(core busy > {a.active:.0%}); r(x) = Pearson correlation with x")
+    head = "".join(f" {'r(' + r + ')':>13s}" for r in refs)
+    print(f"  {'metric':14s} {'axis':9s} {'mean':>12s} {'median':>12s}{head}  label")
     for n, m in ((n, metrics.METRICS[n]) for n in chosen):
         vals = [s[n][i] for i in active]
         fv = finite(vals)
         if not fv:
-            print(f"  {n:16s} {m.axis:6s} {'n/a':>10s}  (counters not recorded in this run)")
+            print(f"  {n:14s} {m.axis:9s} {'n/a':>12s}  (counters not recorded in this run)")
             continue
-        r = pearson(ref, vals) if ref else math.nan
-        print(f"  {n:16s} {m.axis:6s} {statistics.mean(fv):10.3f} "
-              f"{statistics.median(fv):10.3f} {r:7.3f}  {m.label}")
+        rs = "".join(f" {pearson(ref_vals[r], vals):13.3f}" for r in refs)
+        print(f"  {n:14s} {m.axis:9s} {statistics.mean(fv):12.4g} "
+              f"{statistics.median(fv):12.4g}{rs}  {m.label}")
     print(f"  wrote {a.run / 'series.csv'}")
 
     if a.no_plots:
@@ -202,7 +206,7 @@ def main():
                     lw=0.9, label=f"{m.label} (x{k:.3g})")
             ax.set_title(f"{n}: r = {r:.2f}", fontsize=9, loc="left")
             ax.set_ylim(bottom=0)
-            ax.set_ylabel("MLP (scaled)", fontsize=8)
+            ax.set_ylabel(spec.left_label, fontsize=8)
             ax.legend(loc="upper right", fontsize=7)
         axes[-1, 0].set_xlabel("Time (s)")
         fig.suptitle(f"{spec.title} (bc-kron, {ctx['mem']})")
