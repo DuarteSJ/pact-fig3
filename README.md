@@ -72,10 +72,11 @@ Three files, each with one job:
 - `plot.py`: the engine (no metric-specific code). It evaluates every
   registered metric, writes `series.csv`, prints mean/median and the
   correlation with a reference metric (default: PACT's TOR-MLP), and draws
-  one image per run, `mlp.png`: every MLP estimate over time, each rescaled
-  to the mean of PACT's TOR-MLP (thick black) so shapes can be compared,
-  with its scale factor and correlation in the legend. New metrics on the
-  `mlp`/`total` axes appear in it automatically.
+  one image per run, `mlp.png`: one panel per MLP estimate, stacked on a
+  shared time axis, each showing PACT's TOR-MLP (black, the reference) and
+  that estimate rescaled to the reference's mean so shapes can be compared,
+  with its scale factor and correlation. New metrics on the `mlp`/`total`
+  axes get a panel automatically.
 
       python3 plot.py runs/<dir>                      # stats + mlp.png
       python3 plot.py runs/<dir> --figs fig3a,fig3b,fig3c   # PACT's panels

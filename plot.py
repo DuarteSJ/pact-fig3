@@ -187,21 +187,25 @@ def main():
         idx = [i for i in window(spec) if i in act]
         tt = [t[i] for i in idx]
         ref_mean = statistics.mean(finite([ref[i] for i in active]))
-        fig, ax = plt.subplots(figsize=(9, 4))
-        ax.plot(tt, [ref[i] for i in idx], color="black", lw=1.8,
-                label=f"{metrics.METRICS[spec.ref].label} (reference)")
-        for n in names:
+        # One panel per estimate (reference + that estimate), stacked with a
+        # shared time axis, so each comparison is readable on its own.
+        ref_label = f"{metrics.METRICS[spec.ref].label} (reference)"
+        fig, axes = plt.subplots(len(names), 1, sharex=True, squeeze=False,
+                                 figsize=(9, 1.2 + 2.1 * len(names)))
+        for ax, n in zip(axes[:, 0], names):
             m = metrics.METRICS[n]
             v = series(n)
             k = ref_mean / statistics.mean(finite([v[i] for i in active]))
             r = pearson([ref[i] for i in active], [v[i] for i in active])
-            ax.plot(tt, [k * v[i] for i in idx], m.style, color=m.color, lw=0.9,
-                    label=f"{m.label}  (x{k:.3g}, r={r:.2f})")
-        ax.set_xlabel("Time (s)")
-        ax.set_ylabel(spec.left_label)
-        ax.set_ylim(bottom=0)
-        ax.set_title(f"{spec.title} (bc-kron, {ctx['mem']})")
-        ax.legend(loc="upper right", fontsize=7)
+            ax.plot(tt, [ref[i] for i in idx], color="black", lw=1.4, label=ref_label)
+            ax.plot(tt, [k * v[i] for i in idx], m.style, color=m.color or "tab:orange",
+                    lw=0.9, label=f"{m.label} (x{k:.3g})")
+            ax.set_title(f"{n}: r = {r:.2f}", fontsize=9, loc="left")
+            ax.set_ylim(bottom=0)
+            ax.set_ylabel("MLP (scaled)", fontsize=8)
+            ax.legend(loc="upper right", fontsize=7)
+        axes[-1, 0].set_xlabel("Time (s)")
+        fig.suptitle(f"{spec.title} (bc-kron, {ctx['mem']})")
         return fig
 
     all_figs = {**metrics.FIGURES, **metrics.EXTRA_FIGURES}
