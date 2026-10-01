@@ -85,8 +85,9 @@ Three files, each with one job:
 
 Outputs go to `runs/<timestamp>-<mem>/` (`core.csv`, `uncore.csv`,
 `bc.log`, `meta.txt`, `counters.py`). Then `python3 plot.py runs/<dir>`
-(figures need matplotlib; traquina has none, so copy the run dir back and
-plot locally, e.g. `nix-shell -p "python3.withPackages (ps: [ ps.matplotlib ])"`).
+(figures need matplotlib: `apt install python3-matplotlib` on the host).
+To look at the figures locally, `./fetch.sh` syncs the host's `runs/`
+(data, `series.csv`, PNGs) into the local `runs/` (rsync, incremental).
 
 Needs `perf`, `numactl`, GAPBS `bc` and the kron graph (defaults point at
 the Demeter fork checkout: `~/demeter-criticality/workload/gapbs/bc` and
