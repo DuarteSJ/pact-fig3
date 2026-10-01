@@ -50,12 +50,16 @@ def main():
                 table.setdefault(n, {})[run.name] = pearson(ref, v)
 
     cols = [r[0].name for r in runs]
-    print(f"r = Pearson correlation with {spec.ref} ({metrics.METRICS[spec.ref].label}), per run")
-    print(f"  {'metric':14s} " + " ".join(f"{c[-24:]:>24s}" for c in cols) + f" {'mean':>7s}  label")
+    lines = [f"r = Pearson correlation with {spec.ref} ({metrics.METRICS[spec.ref].label}), per run",
+             f"  {'metric':14s} " + " ".join(f"{c[-24:]:>24s}" for c in cols) + f" {'mean':>7s}  label"]
     for n in sorted(table, key=lambda n: -statistics.mean(table[n].values())):
         rs = table[n]
         cells = " ".join(f"{rs[c]:24.3f}" if c in rs else f"{'-':>24s}" for c in cols)
-        print(f"  {n:14s} {cells} {statistics.mean(rs.values()):7.3f}  {metrics.METRICS[n].label}")
+        lines.append(f"  {n:14s} {cells} {statistics.mean(rs.values()):7.3f}  {metrics.METRICS[n].label}")
+    print("\n".join(lines))
+    mem = runs[0][1]["mem"]
+    out = a.out or a.runs[0].parent / f"compare-{a.fig}-{mem}.png"
+    out.with_suffix(".txt").write_text("\n".join(lines) + "\n")
 
     try:
         import matplotlib
@@ -83,10 +87,8 @@ def main():
         ax.set_ylabel(spec.left_label, fontsize=8)
         ax.legend(loc="upper right", fontsize=7)
     axes[-1, 0].set_xlabel("Time (s)")
-    mem = runs[0][1]["mem"]
     fig.suptitle(f"{spec.title} (bc-kron, {mem}; sorted by mean r)")
     fig.tight_layout()
-    out = a.out or a.runs[0].parent / f"compare-{a.fig}-{mem}.png"
     fig.savefig(out, dpi=150)
     print(f"wrote {out}")
 
