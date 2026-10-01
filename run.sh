@@ -13,6 +13,7 @@
 #   CPUS       workload CPUs, on socket 0                      [0-7]
 #   WORKLOAD   workload name from workloads.sh                  [bc]
 #   TRIALS     bc trials (runtime)                             [8]
+#   TIMEOUT    stop the workload after this long (timeout(1))  [20m]
 #   INTERVAL   perf sampling interval in ms                    [100]
 #   PROFILE    counter profile (counters.py: python3 counters.py
 #              profiles). One core MLP estimator per run fits the PMU;
@@ -108,7 +109,8 @@ sleep 1
 echo "[fig3] $WORKLOAD $MEM $PROFILE: CPUs $CPUS ($THREADS threads), output $OUT"
 echo "workload_start_epoch=$(date +%s.%N)" >>"$OUT/meta.txt"
 RC=0  # set -e must not skip stopping perf if the workload fails
-OMP_NUM_THREADS="$THREADS" numactl -C "$CPUS" "${MEMARGS[@]}" \
+OMP_NUM_THREADS="$THREADS" timeout --signal=INT --kill-after=1m "${TIMEOUT:-20m}" \
+	numactl -C "$CPUS" "${MEMARGS[@]}" \
 	"${CMD[@]}" >"$OUT/workload.log" 2>&1 || RC=$?
 echo "workload_rc=$RC workload_end_epoch=$(date +%s.%N)" >>"$OUT/meta.txt"
 
