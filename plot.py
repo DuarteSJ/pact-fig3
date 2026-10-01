@@ -83,10 +83,35 @@ def load(run: Path):
     }
     core = parse(run / "core.csv", counters.name_map("core"), ctx["interval_s"])
     unc = parse(run / "uncore.csv", counters.name_map("uncore"), ctx["interval_s"], socket="S0")
+    # PEBS samples binned by pebs_intervals.py (run.sh PEBS=1): columns
+    # become counters prefixed "pebs_" (pebs_l3m_slow, pebs_lat_slow_sum, ...).
+    pebs = defaultdict(dict)
+    if (run / "pebs.csv").exists():
+        with (run / "pebs.csv").open() as f:
+            for row in csv.DictReader(f):
+                k = int(row.pop("interval"))
+                pebs[k] = {f"pebs_{c}": float(v) for c, v in row.items()}
     keys = sorted(set(core) | set(unc))
     t = [k * ctx["interval_s"] for k in keys]
-    samples = [{**core.get(k, {}), **unc.get(k, {})} for k in keys]
+    samples = [{**core.get(k, {}), **unc.get(k, {}), **pebs.get(k, {})} for k in keys]
     return ctx, t, samples
+
+
+def active_intervals(samples, ctx, threshold):
+    """Intervals where the workload is doing memory work: core busy fraction
+    (l2 profile) above `threshold`, else any interval with L3 misses."""
+    busy = [evaluate(metrics.METRICS["core_u"], c, ctx) for c in samples]
+    if finite(busy):
+        return [i for i, u in enumerate(busy) if not math.isnan(u) and u > threshold]
+    return [i for i, c in enumerate(samples) if c.get("l3_miss", 0) > 0]
+
+
+def analyze(run: Path, names=None, threshold=0.05):
+    """Load a run and evaluate metrics: (ctx, t, samples, series, active)."""
+    ctx, t, samples = load(run)
+    names = names or list(metrics.METRICS)
+    s = {n: [evaluate(metrics.METRICS[n], c, ctx) for c in samples] for n in names}
+    return ctx, t, samples, s, active_intervals(samples, ctx, threshold)
 
 
 def main():
@@ -103,26 +128,22 @@ def main():
     ap.add_argument("--no-plots", action="store_true")
     a = ap.parse_args()
 
-    ctx, t, samples = load(a.run)
+    chosen = a.metrics.split(",") if a.metrics else list(metrics.METRICS)
+    ctx, t, samples, s, active = analyze(a.run, chosen, a.active)
     if not t:
         raise SystemExit(f"no intervals parsed in {a.run}")
-    chosen = a.metrics.split(",") if a.metrics else list(metrics.METRICS)
-    s = {n: [evaluate(metrics.METRICS[n], c, ctx) for c in samples] for n in chosen}
 
     with (a.run / "series.csv").open("w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["t_s", *s])
         w.writerows(zip(t, *s.values()))
 
-    busy = [evaluate(metrics.METRICS["core_u"], c, ctx) for c in samples] \
-        if "core_u" in metrics.METRICS else [1.0] * len(t)
-    active = [i for i, u in enumerate(busy) if not math.isnan(u) and u > a.active]
     # Correlate every metric with --ref and with each figure's reference.
     refs = list(dict.fromkeys([a.ref] + [f.ref for f in metrics.FIGURES.values() if f.ref]))
     refs = [r for r in refs if r in s and finite([s[r][i] for i in active])]
     ref_vals = {r: [s[r][i] for i in active] for r in refs}
-    print(f"{a.run.name} ({ctx['mem']}): {len(t)} intervals, {len(active)} active "
-          f"(core busy > {a.active:.0%}); r(x) = Pearson correlation with x")
+    print(f"{a.run.name} ({ctx['mem']}): {len(t)} intervals, {len(active)} active; "
+          f"r(x) = Pearson correlation with x")
     head = "".join(f" {'r(' + r + ')':>13s}" for r in refs)
     print(f"  {'metric':14s} {'axis':9s} {'mean':>12s} {'median':>12s}{head}  label")
     for n, m in ((n, metrics.METRICS[n]) for n in chosen):

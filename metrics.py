@@ -88,6 +88,17 @@ def l3m_mlp(c, ctx):
     return c["l3m_t1"] / c["l3m_t2"]
 
 
+@metric("pebs_slow_mlp", "PEBS slow tier: misses/cycle x latency", color="tab:cyan")
+def pebs_slow_mlp(c, ctx):
+    # PACT's no-TOR fallback built from PEBS, slow tier only: slow L3-miss
+    # rate (L3-miss samples on the slow node x period, per core cycle) times
+    # mean slow load latency (load-latency samples on the slow node, cycles).
+    # Whole-window Little's Law: expected to dilute by the slow tier's idle
+    # time, and its stall prediction to lose N (see S_pebs_slowN).
+    latency = c["pebs_lat_slow_sum"] / c["pebs_lat_slow_n"]
+    return c["pebs_l3m_slow"] / c["core_cycles"] * latency
+
+
 # --- Stall model: S = k * N / MLP (PACT Eq. 1) -------------------------------
 # N = retired loads that missed L3. Each MLP estimator gives a prediction;
 # k is a constant and cancels in correlations and the rescaled plots. The
@@ -130,6 +141,19 @@ def s_occ(c, ctx):
     return c["l3_miss"] / core_occ(c, ctx)
 
 
+@metric("S_pebs", "N / PEBS slow-tier BW x latency", axis="stall", color="tab:cyan")
+def s_pebs(c, ctx):
+    return c["l3_miss"] / pebs_slow_mlp(c, ctx)
+
+
+@metric("S_pebs_slowN", "N_slow / PEBS slow-tier BW x latency (= cycles / latency)",
+        axis="stall", color="teal", style="--")
+def s_pebs_slown(c, ctx):
+    # PACT's Eq. 1 with N and the bandwidth both from slow-tier PEBS samples:
+    # N cancels, leaving core cycles / slow latency.
+    return c["pebs_l3m_slow"] / pebs_slow_mlp(c, ctx)
+
+
 # --- Fractions and diagnostics ---------------------------------------------
 
 
@@ -146,6 +170,11 @@ def tor_u(c, ctx):
 @metric("core_latency", "core demand-read latency (core cycles)", axis="other")
 def core_latency(c, ctx):
     return c["core_t1"] / c["core_req"]
+
+
+@metric("pebs_slow_latency", "PEBS slow-tier load latency (core cycles)", axis="other")
+def pebs_slow_latency(c, ctx):
+    return c["pebs_lat_slow_sum"] / c["pebs_lat_slow_n"]
 
 
 @metric("tor_latency", "TOR DRd-miss latency (CHA cycles)", axis="other")

@@ -9,8 +9,20 @@ the next run and available to metrics (by `name`) in metrics.py.
   group    counters with the same group are scheduled together (perf {...});
            needed when one counter reads another's counter (TOR T1/T2)
   aliases  older names of the same counter, so earlier runs still parse
+  profile  None = always recorded; otherwise only in runs with that PROFILE
+           (run.sh). Core events like OFFCORE_REQUESTS_OUTSTANDING fit only
+           a few general-purpose counters: measured on traquina, one T1/T2
+           pair + stalls + N run at 100%, two pairs multiplex. So each core
+           MLP estimator gets its own profile and is validated in its own run
+           (compare.py combines runs).
 
-`python3 counters.py core|uncore` prints the perf -e arguments, one per line.
+`python3 counters.py core|uncore [profile]` prints the perf -e arguments, one
+per line; `python3 counters.py profiles` lists the profiles.
+
+With run.sh PEBS=1 there are also sampled counters, binned per interval by
+pebs_intervals.py into pebs.csv and available to metrics as
+pebs_l3m_{slow,fast} (estimated L3-miss loads per tier) and
+pebs_lat_{slow,fast}_{n,sum} (load-latency samples and summed latency).
 """
 
 import sys
@@ -24,6 +36,7 @@ class Counter:
     scope: str
     group: str | None = None
     aliases: tuple = field(default_factory=tuple)
+    profile: str | None = None
 
     def perf(self) -> str:
         assert self.spec.endswith("/"), self.spec
@@ -34,18 +47,18 @@ COUNTERS = [
     # Core, per workload CPU (summed): L2-miss demand data reads.
     # OFFCORE_REQUESTS_OUTSTANDING.DEMAND_DATA_RD: per-cycle sum of pending.
     # T1/T2 pairs are grouped so both are always counted over the same time.
-    Counter("core_t1", "cpu/event=0x20,umask=0x1/", "core", "l2"),
+    Counter("core_t1", "cpu/event=0x20,umask=0x1/", "core", "l2", profile="l2"),
     # ...CYCLES_WITH_DEMAND_DATA_RD (cmask=1): cycles with >= 1 pending.
-    Counter("core_t2", "cpu/event=0x20,umask=0x1,cmask=1/", "core", "l2"),
+    Counter("core_t2", "cpu/event=0x20,umask=0x1,cmask=1/", "core", "l2", profile="l2"),
     # OFFCORE_REQUESTS.DEMAND_DATA_RD: number of such requests.
-    Counter("core_req", "cpu/event=0x21,umask=0x1/", "core"),
-    Counter("core_cycles", "cpu/cycles/", "core"),
+    Counter("core_req", "cpu/event=0x21,umask=0x1/", "core", profile="req"),
+    Counter("core_cycles", "cpu/cycles/", "core"),  # fixed counter
     # Same, restricted to demand reads known to have missed L3 (i.e. served
     # by memory): OFFCORE_REQUESTS_OUTSTANDING.L3_MISS_DEMAND_DATA_RD, its
     # cmask=1 variant, and OFFCORE_REQUESTS.L3_MISS_DEMAND_DATA_RD.
-    Counter("l3m_t1", "cpu/event=0x20,umask=0x10/", "core", "l3m"),
-    Counter("l3m_t2", "cpu/event=0x20,umask=0x10,cmask=1/", "core", "l3m"),
-    Counter("l3m_req", "cpu/event=0x21,umask=0x10/", "core"),
+    Counter("l3m_t1", "cpu/event=0x20,umask=0x10/", "core", "l3m", profile="l3m"),
+    Counter("l3m_t2", "cpu/event=0x20,umask=0x10,cmask=1/", "core", "l3m", profile="l3m"),
+    Counter("l3m_req", "cpu/event=0x21,umask=0x10/", "core", profile="req"),
     # Ground truth and PACT's numerator for the stall model S = k N / MLP:
     # CYCLE_ACTIVITY.STALLS_L3_MISS (execution stalled while an L3-miss
     # demand load is pending) and MEM_LOAD_RETIRED.L3_MISS (N).
@@ -66,14 +79,20 @@ COUNTERS = [
 ]
 
 
-def by_scope(scope):
-    return [c for c in COUNTERS if c.scope == scope]
+def by_scope(scope, profile=None):
+    """Counters of a scope; with a profile, only those recorded in it."""
+    return [c for c in COUNTERS if c.scope == scope
+            and (profile is None or c.profile in (None, profile))]
 
 
-def perf_args(scope):
+def profiles():
+    return sorted({c.profile for c in COUNTERS if c.profile} | {"pebs"})
+
+
+def perf_args(scope, profile):
     """One perf -e argument per line: each group as {a,b}, others alone."""
     out, groups = [], {}
-    for c in by_scope(scope):
+    for c in by_scope(scope, profile):
         if c.group:
             groups.setdefault(c.group, []).append(c.perf())
         else:
@@ -92,4 +111,7 @@ def name_map(scope):
 
 
 if __name__ == "__main__":
-    print("\n".join(perf_args(sys.argv[1])))
+    if sys.argv[1] == "profiles":
+        print(" ".join(profiles()))
+    else:
+        print("\n".join(perf_args(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "l2")))
