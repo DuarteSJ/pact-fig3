@@ -109,8 +109,8 @@ def tor_latency(c, ctx):
 class Figure:
     """kind "lines": `left`/`right` metrics on two y axes.
     kind "track": every metric on `track_axes` (or `left`, if given) rescaled
-    to the mean of `ref` and drawn over it, plus a scatter against it; for
-    checking whether an estimate follows the reference's shape."""
+    to the mean of `ref` and drawn over it in one plot; for checking whether
+    an estimate follows the reference's shape."""
 
     title: str
     left: list = field(default_factory=list)
@@ -123,16 +123,20 @@ class Figure:
     track_axes: tuple = ("mlp", "total")
 
 
+# Drawn by default: one image per run, every MLP estimate against PACT's own
+# method (TOR-MLP), each rescaled to its mean so shapes can be compared. New
+# metrics on the mlp/total axes appear automatically.
 FIGURES = {
+    "mlp": Figure("MLP estimates vs PACT TOR-MLP", kind="track", ref="tor_mlp",
+                  left_label="MLP (scaled to the reference's mean)"),
+}
+
+# PACT Fig. 3 panels and the busy-fraction view; only with plot.py --figs.
+EXTRA_FIGURES = {
     "fig3a": Figure("(a) Temporal MLP", ["l2_mlp", "tor_mlp"], ["little_total"],
                     right_label="Approximated MLP"),
     "fig3b": Figure("(b) MLP stability", ["l2_mlp", "tor_mlp"], ["little_total"],
                     right_label="Approximated MLP", zoom_s=20),
     "fig3c": Figure("(c) Busy-time vs whole-window MLP", ["l2_mlp", "core_occ"], ["core_u"],
                     left_label="requests in flight per core", right_label="busy fraction"),
-    # PACT's own method (TOR-MLP) as reference; every other MLP estimate,
-    # rescaled to its mean, over it. New metrics on the mlp/total axes are
-    # included automatically.
-    "track": Figure("MLP estimates vs PACT TOR-MLP", kind="track", ref="tor_mlp",
-                    left_label="MLP (scaled to the reference's mean)"),
 }
