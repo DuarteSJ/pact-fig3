@@ -84,16 +84,25 @@ Three files, each with one job:
 
 ## Run (on traquina, host)
 
-    ./run.sh                    # bc-kron, memory on CXL node 2, 8 threads
-    MEM=dram ./run.sh           # same on DRAM node 0 (reference)
-    MEM=interleave ./run.sh     # interleaved over nodes 0 and 2
+    WORKLOAD=bc MEM=cxl PROFILE=fig3 ./run.sh
 
-Outputs go to `runs/<timestamp>-<mem>/` (`core.csv`, `uncore.csv`,
-`bc.log`, `meta.txt`, `counters.py`). Then `python3 plot.py runs/<dir>`
-(figures need matplotlib: `apt install python3-matplotlib` on the host).
-To look at the figures locally, `./fetch.sh` pulls just the PNGs and the
-`compare-*.txt` tables from the host's `runs/` into the local `runs/`
-(rsync, incremental); the data stays on the host.
+- `WORKLOAD`: any name in `workloads.sh` (bc, pagerank, graph500, xsbench,
+  btree, gups, liblinear, bwaves, silo); adding one is a `case` line there.
+- `MEM`: where the workload's memory lives, one tier per run as in PACT's
+  Fig. 3: `dram` (node 0), `numa` (the other socket's DRAM, node 1), `cxl`
+  (node 2); `interleave` spreads it over DRAM and CXL.
+- `PROFILE`: which counters to record (`counters.py`). The core PMU fits one
+  T1/T2 pair next to a few other events, so:
+  - `fig3`: L2MLP pair + PEBS sampling + TOR, for PACT's Fig. 3
+  - `l2`, `l3m`, `pebs`: one MLP estimator each next to measured stalls,
+    for the stall test (`compare.py ... --fig stalls`)
+
+Outputs go to `runs/<timestamp>-<workload>-<mem>-<profile>/` (`core.csv`,
+`uncore.csv`, `pebs.csv`, `workload.log`, `meta.txt`, `counters.py`); then
+`python3 plot.py runs/<dir>` writes `fig3.png` there (figures need
+matplotlib: `apt install python3-matplotlib` on the host). To look at the
+figures locally, `./fetch.sh` pulls just the PNGs and the `compare-*.txt`
+tables from the host's `runs/` (rsync, incremental); the data stays there.
 
 Needs `perf`, `numactl`, GAPBS `bc` and the kron graph (defaults point at
 the Demeter fork checkout: `~/demeter-criticality/workload/gapbs/bc` and

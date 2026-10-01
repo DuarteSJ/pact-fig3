@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# Reproduce PACT Fig. 3 on bare metal: run GAPBS bc on a Kronecker graph with
-# its memory on one tier while sampling core L2-MLP and CHA TOR-MLP counters
-# every INTERVAL ms. See README.md for the metric definitions.
+# Reproduce PACT Fig. 3 on bare metal: run a workload (workloads.sh) with its
+# memory on one tier while sampling core L2-MLP and CHA TOR-MLP counters every
+# INTERVAL ms (and PEBS samples, per profile). See README.md for the metrics.
 #
 # Env (defaults in brackets):
-#   MEM        cxl | dram | interleave                       [cxl]
+#   MEM        cxl | dram | numa | interleave                [cxl]
+#              (numa: the other socket's DRAM; PACT's three single-tier
+#              configurations are dram, numa and cxl)
 #   CXL_NODE   CXL NUMA node (cpuless, socket 0)              [2]
 #   DRAM_NODE  DRAM NUMA node of socket 0                     [0]
+#   NUMA_NODE  DRAM NUMA node of the other socket             [1]
 #   CPUS       workload CPUs, on socket 0                      [0-7]
+#   WORKLOAD   workload name from workloads.sh                  [bc]
 #   TRIALS     bc trials (runtime)                             [8]
 #   INTERVAL   perf sampling interval in ms                    [100]
 #   PROFILE    counter profile (counters.py: python3 counters.py
@@ -16,35 +20,39 @@
 #              bandwidth x latency estimate (pebs.csv)            [l2]
 #   PEBS_L3M_PERIOD / PEBS_LAT_PERIOD  sample periods      [2003 / 101]
 #   LDLAT      load-latency threshold in cycles                [60]
-#   BC, GRAPH  GAPBS bc binary and .sg graph
+#   BIN        directory with the workload binaries and datasets
+#              (workloads.sh)       [~/demeter-criticality/bin]
 set -euo pipefail
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MEM="${MEM:-cxl}"
 CXL_NODE="${CXL_NODE:-2}"
 DRAM_NODE="${DRAM_NODE:-0}"
+NUMA_NODE="${NUMA_NODE:-1}"
 CPUS="${CPUS:-0-7}"
 TRIALS="${TRIALS:-8}"
 INTERVAL="${INTERVAL:-100}"
 PROFILE="${PROFILE:-l2}"
-PEBS=$([ "$PROFILE" = pebs ] && echo 1 || echo 0)
+PEBS=$(python3 "$SELF/counters.py" pebs "$PROFILE" && echo 1 || echo 0)
 PEBS_L3M_PERIOD="${PEBS_L3M_PERIOD:-2003}"
 PEBS_LAT_PERIOD="${PEBS_LAT_PERIOD:-101}"
 LDLAT="${LDLAT:-60}"
-BC="${BC:-$HOME/demeter-criticality/workload/gapbs/bc}"
-GRAPH="${GRAPH:-$HOME/demeter-criticality/bin/kron26.sg}"
+WORKLOAD="${WORKLOAD:-bc}"
 
-# The slow tier is the CXL node in every configuration.
-SLOW_NODES="$CXL_NODE"
+# SLOW_NODES: the tier PEBS samples are attributed to ("slow" in pebs.csv):
+# the bound node in single-tier runs, the CXL node when interleaved.
 case "$MEM" in
-cxl) MEMARGS=(--membind="$CXL_NODE") ;;
-dram) MEMARGS=(--membind="$DRAM_NODE") ;;
-interleave) MEMARGS=(--interleave="$DRAM_NODE,$CXL_NODE") ;;
-*) echo "MEM must be cxl, dram or interleave" >&2; exit 1 ;;
+cxl) MEMARGS=(--membind="$CXL_NODE") SLOW_NODES="$CXL_NODE" ;;
+dram) MEMARGS=(--membind="$DRAM_NODE") SLOW_NODES="$DRAM_NODE" ;;
+numa) MEMARGS=(--membind="$NUMA_NODE") SLOW_NODES="$NUMA_NODE" ;;
+interleave) MEMARGS=(--interleave="$DRAM_NODE,$CXL_NODE") SLOW_NODES="$CXL_NODE" ;;
+*) echo "MEM must be cxl, dram, numa or interleave" >&2; exit 1 ;;
 esac
 THREADS=$(numactl -C "$CPUS" nproc)
+source "$SELF/workloads.sh"
+workload_cmd "$WORKLOAD" || exit 1
 
-OUT="$SELF/runs/$(date +%Y%m%dT%H%M%S)-$MEM-$PROFILE"
+OUT="$SELF/runs/$(date +%Y%m%dT%H%M%S)-$WORKLOAD-$MEM-$PROFILE"
 mkdir -p "$OUT"
 
 # Counters come from counters.py (one perf -e argument per line).
@@ -53,8 +61,9 @@ while read -r e; do CORE_E+=(-e "$e"); done < <(python3 "$SELF/counters.py" core
 while read -r e; do UNCORE_E+=(-e "$e"); done < <(python3 "$SELF/counters.py" uncore "$PROFILE")
 
 cat >"$OUT/meta.txt" <<EOF
-mem=$MEM membind=${MEMARGS[*]} cpus=$CPUS threads=$THREADS trials=$TRIALS
-interval_ms=$INTERVAL bc=$BC graph=$GRAPH
+workload=$WORKLOAD mem=$MEM membind=${MEMARGS[*]} cpus=$CPUS threads=$THREADS trials=$TRIALS
+interval_ms=$INTERVAL
+cmd=${CMD[*]}
 host=$(hostname) kernel=$(uname -r)
 cha_per_socket=$(ls -d /sys/bus/event_source/devices/uncore_cha_* | wc -l)
 profile=$PROFILE slow_nodes=$SLOW_NODES pebs=$PEBS pebs_l3m_period=$PEBS_L3M_PERIOD pebs_lat_period=$PEBS_LAT_PERIOD ldlat=$LDLAT
@@ -96,11 +105,12 @@ UNCORE_PID=$!
 echo "perf_start_epoch=$(date +%s.%N)" >>"$OUT/meta.txt"
 sleep 1
 
-echo "[fig3] $MEM: bc on CPUs $CPUS ($THREADS threads), output $OUT"
-echo "bc_start_epoch=$(date +%s.%N)" >>"$OUT/meta.txt"
+echo "[fig3] $WORKLOAD $MEM $PROFILE: CPUs $CPUS ($THREADS threads), output $OUT"
+echo "workload_start_epoch=$(date +%s.%N)" >>"$OUT/meta.txt"
+RC=0  # set -e must not skip stopping perf if the workload fails
 OMP_NUM_THREADS="$THREADS" numactl -C "$CPUS" "${MEMARGS[@]}" \
-	"$BC" -f "$GRAPH" -n "$TRIALS" >"$OUT/bc.log" 2>&1
-echo "bc_end_epoch=$(date +%s.%N)" >>"$OUT/meta.txt"
+	"${CMD[@]}" >"$OUT/workload.log" 2>&1 || RC=$?
+echo "workload_rc=$RC workload_end_epoch=$(date +%s.%N)" >>"$OUT/meta.txt"
 
 sleep 1
 kill -INT "$CORE_PID" "$UNCORE_PID" ${PEBS_PID:-}
@@ -108,6 +118,6 @@ wait "$CORE_PID" "$UNCORE_PID" ${PEBS_PID:-} 2>/dev/null || true
 if [ "$PEBS" = 1 ]; then
 	python3 "$SELF/pebs_intervals.py" "$OUT" && rm -f "$OUT/pebs.data"
 fi
-grep -E "Trial Time|Average Time" "$OUT/bc.log" | tail -3
+tail -3 "$OUT/workload.log"
 cp "$SELF/counters.py" "$OUT/"  # what was recorded, for later reference
 echo "[fig3] done: python3 $SELF/plot.py $OUT"

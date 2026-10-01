@@ -24,10 +24,10 @@ from plot import analyze, finite, pearson
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+", type=Path)
-    ap.add_argument("--fig", default="stalls", help="a track figure in metrics.FIGURES")
+    ap.add_argument("--fig", default="stalls", help="a track figure (metrics.EXTRA_FIGURES)")
     ap.add_argument("--out", type=Path, help="output image (default: runs/compare-<fig>-<mem>.png)")
     a = ap.parse_args()
-    spec = metrics.FIGURES[a.fig]
+    spec = {**metrics.FIGURES, **metrics.EXTRA_FIGURES}[a.fig]
     assert spec.kind == "track" and spec.ref, f"{a.fig} is not a track figure"
 
     runs = []
@@ -87,9 +87,9 @@ def main():
         ax.set_ylabel(spec.left_label, fontsize=8)
         ax.legend(loc="upper right", fontsize=7)
     axes[-1, 0].set_xlabel("Time (s)")
-    fig.suptitle(f"{spec.title} (bc-kron, {mem}; sorted by mean r)")
+    fig.suptitle(f"{spec.title} ({runs[0][1]['workload']}, {mem}; sorted by mean r)")
     fig.tight_layout()
-    fig.savefig(out, dpi=150)
+    fig.savefig(out, dpi=110)
     print(f"wrote {out}")
 
 

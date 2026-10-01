@@ -80,6 +80,7 @@ def load(run: Path):
         "n_cha": int(meta.get("cha_per_socket", 32)),
         "threads": int(meta.get("threads", 1)),
         "mem": meta.get("mem", "?"),
+        "workload": meta.get("workload", "bc"),
     }
     core = parse(run / "core.csv", counters.name_map("core"), ctx["interval_s"])
     unc = parse(run / "uncore.csv", counters.name_map("uncore"), ctx["interval_s"], socket="S0")
@@ -117,8 +118,8 @@ def analyze(run: Path, names=None, threshold=0.05):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run", type=Path)
-    ap.add_argument("--ref", default="tor_mlp",
-                    help="metric to correlate the others with (default: PACT's TOR-MLP)")
+    ap.add_argument("--ref", default="l2_mlp",
+                    help="metric to correlate the others with (default: L2MLP, PACT's reference)")
     ap.add_argument("--metrics", help="comma-separated subset (default: all)")
     ap.add_argument("--figs", help="figures to draw (default: metrics.FIGURES; "
                     "also metrics.EXTRA_FIGURES, e.g. fig3a,fig3b,fig3c)")
@@ -180,6 +181,31 @@ def main():
             hi = lo + spec.zoom_s
         return [i for i, x in enumerate(t) if lo <= x <= hi]
 
+    def lines_on(ax, spec, idx, title):
+        # left/right metrics of `spec` over intervals idx, on ax (+ twin axis)
+        tt = [t[i] for i in idx]
+        axes = [(ax, spec.left, spec.left_label)]
+        if spec.right:
+            axes.append((ax.twinx(), spec.right, spec.right_label))
+        handles = []
+        for axis, names, ylabel in axes:
+            for n in names:
+                m = metrics.METRICS[n]
+                (h,) = axis.plot(tt, [series(n)[i] for i in idx], m.style, color=m.color, lw=1, label=m.label)
+                handles.append(h)
+            axis.set_ylabel(ylabel)
+            axis.set_ylim(bottom=0)
+        ax.set_xlabel("Time (s)")
+        ax.set_title(title, fontsize=10)
+        ax.legend(handles, [h.get_label() for h in handles], loc="upper right", fontsize=7)
+
+    def draw_pact(fname, spec):
+        # PACT Fig. 3: (a) the whole run, (b) a zoom_s window.
+        fig, (a1, a2) = plt.subplots(2, 1, figsize=(8, 6.4))
+        lines_on(a1, spec, list(range(len(t))), f"(a) Temporal MLP ({ctx['workload']}, {ctx['mem']})")
+        lines_on(a2, spec, window(spec), f"(b) MLP stability, {spec.zoom_s:g} s")
+        return fig
+
     def draw_lines(fname, spec):
         idx = window(spec)
         tt = [t[i] for i in idx]
@@ -196,7 +222,7 @@ def main():
             axis.set_ylabel(ylabel)
             axis.set_ylim(bottom=0)
         ax.set_xlabel("Time (s)")
-        ax.set_title(f"{spec.title} (bc-kron, {ctx['mem']})")
+        ax.set_title(f"{spec.title} ({ctx['workload']}, {ctx['mem']})")
         ax.legend(handles, [h.get_label() for h in handles], loc="upper right", fontsize=7)
         return fig
 
@@ -230,7 +256,7 @@ def main():
             ax.set_ylabel(spec.left_label, fontsize=8)
             ax.legend(loc="upper right", fontsize=7)
         axes[-1, 0].set_xlabel("Time (s)")
-        fig.suptitle(f"{spec.title} (bc-kron, {ctx['mem']})")
+        fig.suptitle(f"{spec.title} ({ctx['workload']}, {ctx['mem']})")
         return fig
 
     all_figs = {**metrics.FIGURES, **metrics.EXTRA_FIGURES}
@@ -243,9 +269,10 @@ def main():
                 png.unlink()
     for fname in figs:
         spec = all_figs[fname]
-        fig = draw_track(fname, spec) if spec.kind == "track" else draw_lines(fname, spec)
+        draw = {"track": draw_track, "pact": draw_pact}.get(spec.kind, draw_lines)
+        fig = draw(fname, spec)
         fig.tight_layout()
-        fig.savefig(a.run / f"{fname}.png", dpi=150)
+        fig.savefig(a.run / f"{fname}.png", dpi=110)
         plt.close(fig)
     print(f"  wrote {', '.join(f + '.png' for f in figs)}")
 

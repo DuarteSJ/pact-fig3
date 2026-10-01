@@ -99,6 +99,16 @@ def pebs_slow_mlp(c, ctx):
     return c["pebs_l3m_slow"] / c["core_cycles"] * latency
 
 
+@metric("pebs_bwlat_total", "BW x Latency (PEBS): tier misses/cycle x latency, system-wide",
+        axis="total", color="gray")
+def pebs_bwlat_total(c, ctx):
+    # PACT Fig. 3's gray line ("Bandwidth x Latency / 64B"), with bandwidth
+    # and latency estimated from PEBS samples on the run's tier: requests in
+    # flight across the workload's cores (per-core cycles = sum / threads).
+    latency = c["pebs_lat_slow_sum"] / c["pebs_lat_slow_n"]
+    return c["pebs_l3m_slow"] / (c["core_cycles"] / ctx["threads"]) * latency
+
+
 # --- Stall model: S = k * N / MLP (PACT Eq. 1) -------------------------------
 # N = retired loads that missed L3. Each MLP estimator gives a prediction;
 # k is a constant and cancels in correlations and the rescaled plots. The
@@ -188,6 +198,8 @@ def tor_latency(c, ctx):
 @dataclass
 class Figure:
     """kind "lines": `left`/`right` metrics on two y axes.
+    kind "pact": PACT Fig. 3 layout, (a) the whole run and (b) a `zoom_s`
+    window, each with `left`/`right` metrics on two y axes.
     kind "track": every metric on `track_axes` (or `left`, if given) rescaled
     to the mean of `ref` and drawn over it in one plot; for checking whether
     an estimate follows the reference's shape."""
@@ -203,19 +215,21 @@ class Figure:
     track_axes: tuple = ("mlp", "total")
 
 
-# Drawn by default: one image per run, every MLP estimate against PACT's own
-# method (TOR-MLP), each rescaled to its mean so shapes can be compared. New
-# metrics on the mlp/total axes appear automatically.
+# Drawn by default: PACT's Fig. 3 (bc-kron, one memory tier per run): L2MLP
+# (red, their reference), TOR-MLP (blue) and Bandwidth x Latency (gray,
+# right axis; here estimated from PEBS samples on the run's tier).
 FIGURES = {
+    "fig3": Figure("Per-tier MLP", ["l2_mlp", "tor_mlp"], ["pebs_bwlat_total"],
+                   right_label="Approximated MLP", kind="pact", zoom_s=20),
+}
+
+# Other views; only with plot.py --figs (compare.py --fig for track figures).
+EXTRA_FIGURES = {
     "mlp": Figure("MLP estimates vs PACT TOR-MLP", kind="track", ref="tor_mlp",
                   left_label="MLP (scaled)"),
     # Which MLP estimate predicts measured stalls best (PACT's Fig. 2 test).
     "stalls": Figure("Stall model N / MLP vs measured L3-miss stalls", kind="track",
                      ref="stalls", track_axes=("stall",), left_label="stall cycles (scaled)"),
-}
-
-# PACT Fig. 3 panels and the busy-fraction view; only with plot.py --figs.
-EXTRA_FIGURES = {
     "fig3a": Figure("(a) Temporal MLP", ["l2_mlp", "tor_mlp"], ["little_total"],
                     right_label="Approximated MLP"),
     "fig3b": Figure("(b) MLP stability", ["l2_mlp", "tor_mlp"], ["little_total"],

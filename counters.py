@@ -9,7 +9,8 @@ the next run and available to metrics (by `name`) in metrics.py.
   group    counters with the same group are scheduled together (perf {...});
            needed when one counter reads another's counter (TOR T1/T2)
   aliases  older names of the same counter, so earlier runs still parse
-  profile  None = always recorded; otherwise only in runs with that PROFILE
+  profile  None = always recorded; otherwise the profiles (run.sh PROFILE)
+           whose runs record it
            (run.sh). Core events like OFFCORE_REQUESTS_OUTSTANDING fit only
            a few general-purpose counters: measured on traquina, one T1/T2
            pair + stalls + N run at 100%, two pairs multiplex. So each core
@@ -36,43 +37,50 @@ class Counter:
     scope: str
     group: str | None = None
     aliases: tuple = field(default_factory=tuple)
-    profile: str | None = None
+    profile: tuple | None = None
 
     def perf(self) -> str:
         assert self.spec.endswith("/"), self.spec
         return f"{self.spec[:-1]},name={self.name}/"
 
 
+# Profiles that validate MLP estimators against measured stalls.
+STALL_PROFILES = ("l2", "l3m", "pebs")
+# Profiles that also sample loads with PEBS (perf record, see run.sh).
+PEBS_PROFILES = ("pebs", "fig3")
+
 COUNTERS = [
     # Core, per workload CPU (summed): L2-miss demand data reads.
     # OFFCORE_REQUESTS_OUTSTANDING.DEMAND_DATA_RD: per-cycle sum of pending.
     # T1/T2 pairs are grouped so both are always counted over the same time.
-    Counter("core_t1", "cpu/event=0x20,umask=0x1/", "core", "l2", profile="l2"),
+    Counter("core_t1", "cpu/event=0x20,umask=0x1/", "core", "l2", profile=("l2", "fig3")),
     # ...CYCLES_WITH_DEMAND_DATA_RD (cmask=1): cycles with >= 1 pending.
-    Counter("core_t2", "cpu/event=0x20,umask=0x1,cmask=1/", "core", "l2", profile="l2"),
+    Counter("core_t2", "cpu/event=0x20,umask=0x1,cmask=1/", "core", "l2", profile=("l2", "fig3")),
     # OFFCORE_REQUESTS.DEMAND_DATA_RD: number of such requests.
-    Counter("core_req", "cpu/event=0x21,umask=0x1/", "core", profile="req"),
+    Counter("core_req", "cpu/event=0x21,umask=0x1/", "core", profile=("req",)),
     Counter("core_cycles", "cpu/cycles/", "core"),  # fixed counter
     # Same, restricted to demand reads known to have missed L3 (i.e. served
     # by memory): OFFCORE_REQUESTS_OUTSTANDING.L3_MISS_DEMAND_DATA_RD, its
     # cmask=1 variant, and OFFCORE_REQUESTS.L3_MISS_DEMAND_DATA_RD.
-    Counter("l3m_t1", "cpu/event=0x20,umask=0x10/", "core", "l3m", profile="l3m"),
-    Counter("l3m_t2", "cpu/event=0x20,umask=0x10,cmask=1/", "core", "l3m", profile="l3m"),
-    Counter("l3m_req", "cpu/event=0x21,umask=0x10/", "core", profile="req"),
+    Counter("l3m_t1", "cpu/event=0x20,umask=0x10/", "core", "l3m", profile=("l3m",)),
+    Counter("l3m_t2", "cpu/event=0x20,umask=0x10,cmask=1/", "core", "l3m", profile=("l3m",)),
+    Counter("l3m_req", "cpu/event=0x21,umask=0x10/", "core", profile=("req",)),
     # Ground truth and PACT's numerator for the stall model S = k N / MLP:
     # CYCLE_ACTIVITY.STALLS_L3_MISS (execution stalled while an L3-miss
     # demand load is pending) and MEM_LOAD_RETIRED.L3_MISS (N).
-    Counter("stalls_l3m", "cpu/event=0xa3,umask=0x6,cmask=6/", "core"),
-    Counter("l3_miss", "cpu/event=0xd1,umask=0x20/", "core"),
+    Counter("stalls_l3m", "cpu/event=0xa3,umask=0x6,cmask=6/", "core", profile=STALL_PROFILES),
+    Counter("l3_miss", "cpu/event=0xd1,umask=0x20/", "core", profile=STALL_PROFILES),
     # Uncore CHA, per socket (summed over its CHAs). IA demand reads that
-    # missed the LLC and target socket-local memory (_drd_local; with the
-    # workload bound to the CXL node this is the CXL tier).
+    # missed the LLC, any memory target (_ia_miss_drd: local DDR, CXL and the
+    # other socket). As in PACT's Fig. 3 runs, the workload's memory is on one
+    # tier, so this is that tier. (Runs before 2026-10-01 18:00 used the
+    # socket-local filter, umask 0xc816fe01.)
     # TOR occupancy is counter-0 only; event 0x1f thresh=1 counts cycles with
     # counter-0 occupancy >= 1, so it must be grouped with T1 as leader.
-    Counter("tor_t1", "uncore_cha/event=0x36,umask=0xc816fe01/", "uncore", "tor",
+    Counter("tor_t1", "uncore_cha/event=0x36,umask=0xc817fe01/", "uncore", "tor",
             ("unc_cha_tor_occupancy.ia_miss_drd_local",)),
     Counter("tor_t2", "uncore_cha/event=0x1f,thresh=1/", "uncore", "tor"),
-    Counter("tor_ins", "uncore_cha/event=0x35,umask=0xc816fe01/", "uncore", None,
+    Counter("tor_ins", "uncore_cha/event=0x35,umask=0xc817fe01/", "uncore", None,
             ("unc_cha_tor_inserts.ia_miss_drd_local",)),
     Counter("cha_clk", "uncore_cha/event=0x1/", "uncore", None,
             ("unc_cha_clockticks",)),
@@ -82,11 +90,11 @@ COUNTERS = [
 def by_scope(scope, profile=None):
     """Counters of a scope; with a profile, only those recorded in it."""
     return [c for c in COUNTERS if c.scope == scope
-            and (profile is None or c.profile in (None, profile))]
+            and (profile is None or c.profile is None or profile in c.profile)]
 
 
 def profiles():
-    return sorted({c.profile for c in COUNTERS if c.profile} | {"pebs"})
+    return sorted({p for c in COUNTERS for p in (c.profile or ())} | set(PEBS_PROFILES))
 
 
 def perf_args(scope, profile):
@@ -113,5 +121,7 @@ def name_map(scope):
 if __name__ == "__main__":
     if sys.argv[1] == "profiles":
         print(" ".join(profiles()))
+    elif sys.argv[1] == "pebs":  # does this profile sample with PEBS? (exit status)
+        sys.exit(0 if sys.argv[2] in PEBS_PROFILES else 1)
     else:
         print("\n".join(perf_args(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "l2")))
