@@ -15,6 +15,7 @@ axis groups metrics on a comparable scale:
   "total"   requests in flight, system-wide
   "frac"    fractions in [0, 1]
   "other"   anything else (latencies, rates)
+  "check"   algebraic cross-checks, left out of tracking plots
 """
 
 from dataclasses import dataclass, field
@@ -70,7 +71,7 @@ def core_occ(c, ctx):
     return c["core_t1"] / c["core_cycles"]
 
 
-@metric("core_little", "core: requests/cycle x latency", color="black", style=":")
+@metric("core_little", "core: requests/cycle x latency", axis="check", color="black", style=":")
 def core_little(c, ctx):
     # Little's Law from a request count and an average latency; equals
     # core_occ algebraically (T1/req x req/cycles), kept as a check.
@@ -106,12 +107,20 @@ def tor_latency(c, ctx):
 
 @dataclass
 class Figure:
+    """kind "lines": `left`/`right` metrics on two y axes.
+    kind "track": every metric on `track_axes` (or `left`, if given) rescaled
+    to the mean of `ref` and drawn over it, plus a scatter against it; for
+    checking whether an estimate follows the reference's shape."""
+
     title: str
-    left: list
+    left: list = field(default_factory=list)
     right: list = field(default_factory=list)
     left_label: str = "MLP"
     right_label: str = ""
     zoom_s: float | None = None  # window length; start from plot.py --zoom
+    kind: str = "lines"
+    ref: str | None = None
+    track_axes: tuple = ("mlp", "total")
 
 
 FIGURES = {
@@ -121,4 +130,9 @@ FIGURES = {
                     right_label="Approximated MLP", zoom_s=20),
     "fig3c": Figure("(c) Busy-time vs whole-window MLP", ["l2_mlp", "core_occ"], ["core_u"],
                     left_label="requests in flight per core", right_label="busy fraction"),
+    # PACT's own method (TOR-MLP) as reference; every other MLP estimate,
+    # rescaled to its mean, over it. New metrics on the mlp/total axes are
+    # included automatically.
+    "track": Figure("MLP estimates vs PACT TOR-MLP", kind="track", ref="tor_mlp",
+                    left_label="MLP (scaled to the reference's mean)"),
 }

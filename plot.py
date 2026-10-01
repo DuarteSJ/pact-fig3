@@ -92,7 +92,8 @@ def load(run: Path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run", type=Path)
-    ap.add_argument("--ref", default="l2_mlp", help="metric to correlate the others with")
+    ap.add_argument("--ref", default="tor_mlp",
+                    help="metric to correlate the others with (default: PACT's TOR-MLP)")
     ap.add_argument("--metrics", help="comma-separated subset (default: all)")
     ap.add_argument("--figs", help="comma-separated subset of metrics.FIGURES")
     ap.add_argument("--zoom", type=float, help="start (s) of zoomed figures")
@@ -141,14 +142,20 @@ def main():
         print("  matplotlib not available: no figures")
         return
 
-    figs = a.figs.split(",") if a.figs else list(metrics.FIGURES)
-    for fname in figs:
-        spec = metrics.FIGURES[fname]
+    def series(n):
+        if n not in s:
+            s[n] = [evaluate(metrics.METRICS[n], c, ctx) for c in samples]
+        return s[n]
+
+    def window(spec):
         lo, hi = t[0], t[-1]
         if spec.zoom_s:
             lo = a.zoom if a.zoom is not None else t[len(t) // 2] - spec.zoom_s / 2
             hi = lo + spec.zoom_s
-        idx = [i for i, x in enumerate(t) if lo <= x <= hi]
+        return [i for i, x in enumerate(t) if lo <= x <= hi]
+
+    def draw_lines(fname, spec):
+        idx = window(spec)
         tt = [t[i] for i in idx]
         fig, ax = plt.subplots(figsize=(7, 3.2))
         axes = [(ax, spec.left, spec.left_label)]
@@ -157,16 +164,59 @@ def main():
         handles = []
         for axis, names, ylabel in axes:
             for n in names:
-                if n not in s:
-                    s[n] = [evaluate(metrics.METRICS[n], c, ctx) for c in samples]
                 m = metrics.METRICS[n]
-                (h,) = axis.plot(tt, [s[n][i] for i in idx], m.style, color=m.color, lw=1, label=m.label)
+                (h,) = axis.plot(tt, [series(n)[i] for i in idx], m.style, color=m.color, lw=1, label=m.label)
                 handles.append(h)
             axis.set_ylabel(ylabel)
             axis.set_ylim(bottom=0)
         ax.set_xlabel("Time (s)")
         ax.set_title(f"{spec.title} (bc-kron, {ctx['mem']})")
         ax.legend(handles, [h.get_label() for h in handles], loc="upper right", fontsize=7)
+        return fig
+
+    def draw_track(fname, spec):
+        # Reference plus every other estimate rescaled to the reference's
+        # mean over active intervals: compares shapes, not levels.
+        ref = series(spec.ref)
+        names = spec.left or [
+            n for n, m in metrics.METRICS.items()
+            if m.axis in spec.track_axes and n != spec.ref and finite([series(n)[i] for i in active])
+        ]
+        idx = [i for i in window(spec) if i in set(active)]
+        ref_mean = statistics.mean(finite([ref[i] for i in active]))
+        fig, (ax, sc) = plt.subplots(2, 1, figsize=(7, 6.4), gridspec_kw={"height_ratios": [3, 2]})
+        tt = [t[i] for i in idx]
+        ax.plot(tt, [ref[i] for i in idx], color="black", lw=1.6,
+                label=f"{metrics.METRICS[spec.ref].label} (reference)")
+        lim = 0.0
+        for n in names:
+            m = metrics.METRICS[n]
+            v = series(n)
+            k = ref_mean / statistics.mean(finite([v[i] for i in active]))
+            r = pearson([ref[i] for i in active], [v[i] for i in active])
+            label = f"{m.label}  x{k:.3g}, r={r:.2f}"
+            ax.plot(tt, [k * v[i] for i in idx], m.style, color=m.color, lw=0.9, label=label)
+            xs = [ref[i] for i in idx]
+            ys = [k * v[i] for i in idx]
+            sc.scatter(xs, ys, s=3, alpha=0.4, color=m.color, label=n)
+            lim = max(lim, max(finite(xs + ys), default=0))
+        sc.plot([0, lim], [0, lim], color="black", lw=0.8, ls="--", label="y = x")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel(spec.left_label)
+        ax.set_ylim(bottom=0)
+        ax.set_title(f"{spec.title} (bc-kron, {ctx['mem']})")
+        ax.legend(loc="upper right", fontsize=6)
+        sc.set_xlabel(f"reference: {spec.ref}")
+        sc.set_ylabel("estimate (scaled)")
+        sc.set_xlim(0, lim)
+        sc.set_ylim(0, lim)
+        sc.legend(loc="upper left", fontsize=6, markerscale=3)
+        return fig
+
+    figs = a.figs.split(",") if a.figs else list(metrics.FIGURES)
+    for fname in figs:
+        spec = metrics.FIGURES[fname]
+        fig = draw_track(fname, spec) if spec.kind == "track" else draw_lines(fname, spec)
         fig.tight_layout()
         fig.savefig(a.run / f"{fname}.png", dpi=150)
         plt.close(fig)
